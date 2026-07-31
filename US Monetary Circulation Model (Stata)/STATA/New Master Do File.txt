@@ -1,0 +1,162 @@
+/* ==========================================================================
+   MASTER DO-FILE: Credit Card Usage & Currency Demand
+   (Full Analysis: Descriptives -> Diagnostics -> Cointegration -> VECM -> Stability -> ARIMA)
+   ========================================================================== */
+
+// --------------------------------------------------------------------------
+// 1. SETUP & DATA PREPARATION
+// --------------------------------------------------------------------------
+
+// --- UPDATE THIS PATH to your folder ---
+global project_dir "E:\Fast Lane\sem-5\econometrics\Econ Viva plus Demo"
+cd "$project_dir"
+
+
+// Define Time Variable
+capture drop mdate
+generate mdate = tm(2001m1) + _n - 1
+format mdate %tm
+tsset mdate
+
+// Transformations (Logs)
+gen ln_CURRCIR = ln(CURRCIR)
+gen ln_CreditCards = ln(CreditCards)
+gen ln_CPI = ln(CPI)
+
+// --------------------------------------------------------------------------
+// 2. DESCRIPTIVE STATISTICS & GRAPHS
+// --------------------------------------------------------------------------
+// Table 1: Summary Stats
+tabstat ln_CURRCIR ln_CreditCards ln_CPI FEDFUNDS, ///
+    statistics(mean median sd min max skewness kurtosis) ///
+    columns(statistics) format(%9.3f)
+
+// Figure 1: Histograms with Normal Curve (Bell Curve Check)
+hist ln_CURRCIR, normal name(g1, replace) title("Currency")
+hist ln_CreditCards, normal name(g2, replace) title("Credit Cards")
+hist ln_CPI, normal name(g3, replace) title("CPI")
+hist FEDFUNDS, normal name(g4, replace) title("Fed Funds")
+graph combine g1 g2 g3 g4, title("Figure 1: Data Distributions")
+graph export "Fig1_Histograms.png", replace
+
+// Table 2: Correlation Matrix
+pwcorr ln_CURRCIR ln_CreditCards ln_CPI FEDFUNDS, star(0.05) sig
+
+// Figure 2: Correlation Scatterplot Matrix
+graph matrix ln_CURRCIR ln_CreditCards ln_CPI FEDFUNDS, half name(corr_matrix, replace) title("Correlation Matrix")
+graph export "Fig2_Correlation.png", replace
+
+
+// --------------------------------------------------------------------------
+// 3. DIAGNOSTICS (Checking OLS Assumptions)
+// --------------------------------------------------------------------------
+// Run Baseline Regression (Levels) to generate residuals
+quietly regress ln_CURRCIR ln_CreditCards ln_CPI FEDFUNDS
+
+// A. Linearity Check (Residuals vs Fitted)
+rvfplot, yline(0) title("Linearity Check: Residuals vs Fitted") name(linearity, replace)
+graph export "Fig_Linearity.png", replace
+
+// B. Heteroscedasticity Check
+estat imtest, white
+
+// C. Multicollinearity Check
+estat vif
+
+// D. Autocorrelation Check (ACF & PACF Graphs)
+predict resid_levels, residuals
+
+// *** ACF Plot (Auto-Correlation Function) ***
+ac resid_levels, title("ACF of Residuals") name(acf_plot, replace)
+graph export "Fig_ACF_Residuals.png", replace
+
+// *** PACF Plot (Partial Auto-Correlation Function) ***
+pac resid_levels, title("PACF of Residuals") name(pacf_plot, replace)
+graph export "Fig_PACF_Residuals.png", replace
+
+// Formal Test
+estat bgodfrey, lags(12)
+drop resid_levels
+
+// E. Normality Check
+predict resid_norm, residuals
+hist resid_norm, normal title("Normality Check") name(norm_check, replace)
+graph export "Fig_Normality_Check.png", replace
+swilk resid_norm
+drop resid_norm
+
+
+// --------------------------------------------------------------------------
+// 4. THE FIX: STATIONARITY & COINTEGRATION
+// --------------------------------------------------------------------------
+
+// Unit Root Tests (ADF)
+dfuller ln_CURRCIR
+dfuller ln_CreditCards
+dfuller ln_CPI
+dfuller FEDFUNDS
+
+
+// Unit Root Tests (ADF)
+dfuller D.ln_CURRCIR
+dfuller D.ln_CreditCards
+dfuller D.ln_CPI
+dfuller D.FEDFUNDS
+
+// Johansen Cointegration Test
+vecrank ln_CURRCIR ln_CreditCards ln_CPI FEDFUNDS, trend(constant) max
+
+
+// --------------------------------------------------------------------------
+// 5. VECM ESTIMATION & CAUSALITY (Structural Analysis)
+// --------------------------------------------------------------------------
+// Estimate VECM (Rank=1, Lags=2)
+vec ln_CURRCIR ln_CreditCards ln_CPI FEDFUNDS, rank(1) lags(2)
+
+
+// Impulse Response Functions (IRF) - Figure 3
+// Change directory to Documents to avoid permission errors
+cd "C:\Users\Lenovo\OneDrive\Documents"
+capture irf drop thesis_irf
+irf set thesis_irf, replace
+irf create myVECM_Results, step(12) replace
+irf graph oirf, impulse(ln_CreditCards) response(ln_CURRCIR) yline(0) name(irf_graph, replace) title("IRF: Credit Cards on Currency")
+graph export "$project_dir\Fig3_IRF.png", replace
+cd "$project_dir"
+
+
+// --------------------------------------------------------------------------
+// 6. STABILITY TEST (CUSUM)
+// --------------------------------------------------------------------------
+// Run underlying regression for stability check
+quietly regress D.ln_CURRCIR L.D.ln_CURRCIR L.D.ln_CreditCards L.D.ln_CPI L.D.FEDFUNDS
+
+// Generate CUSUM Graph
+estat sbcusum, name(cusum_graph, replace) title("Model Stability (CUSUM)")
+graph export "Fig_CUSUM.png", replace
+
+
+// --------------------------------------------------------------------------
+// 7. FORECASTING (ARIMA)
+// --------------------------------------------------------------------------
+// Model: ARIMA(3,1,3)
+arima ln_CURRCIR, arima(3,1,3)
+
+// Forecast 3 Years Ahead
+drop if mdate > tm(2024m12) 
+tsappend, add(36) 
+predict currency_forecast_3yr, y dynamic(tm(2025m1))
+
+// Final Forecast Graph - Figure 4
+tsline ln_CURRCIR currency_forecast_3yr, ///
+    title("Currency Demand Forecast (2025-2027)") ///
+    subtitle("Based on ARIMA(3,1,3) Model") ///
+    legend(label(1 "Actual Data") label(2 "Forecast")) ///
+    lcolor(blue red) tline(2025m1) name(final_forecast, replace)
+graph export "Fig4_Forecast.png", replace
+
+
+// --------------------------------------------------------------------------
+// 8. SAVE FINAL DATA
+// --------------------------------------------------------------------------
+save "STATA_File_Complete_Final.dta", replace
